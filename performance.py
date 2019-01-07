@@ -36,9 +36,10 @@ def async_timing_val(func):
         return (t2 - t1), res, func.__name__
     return wrapper
 
+
 @async_timing_val
 async def retrieve_with_async(loop, keys: List[str]):
-    
+
     session = aiobotocore.get_session(loop=loop)
     async with session.create_client('s3') as s3_client:
 
@@ -56,10 +57,10 @@ def retrieve_key_worker(key_queue: Queue, results):
     while True:
         try:
             key = key_queue.get_nowait()
-            
             results.append(s3_client.get_object(Bucket=bucket, Key=key)['Body'].read())
         except Empty:
             break
+
 
 @timing_val
 def retrieve_in_thread(keys: List[str], num_threads=100):
