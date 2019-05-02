@@ -2,23 +2,16 @@ import aiobotocore
 import asyncio
 import boto3
 from functools import wraps
-import json
 from queue import Empty, Queue
 import threading
 import time
 from typing import List
 
 
-with open('500k_urls.json') as f:
-    s3_keys = json.load(f)
-
-bucket = 'rbp-dev'
-
-
 def timing_val(func):
     @wraps(func)
     def wrapper(*arg, **kw):
-        '''source: http://www.daniweb.com/code/snippet368.html'''
+        """Source: http://www.daniweb.com/code/snippet368.html"""
         t1 = time.time()
         res = func(*arg, **kw)
         t2 = time.time()
@@ -29,7 +22,7 @@ def timing_val(func):
 def async_timing_val(func):
     @wraps(func)
     async def wrapper(*arg, **kw):
-        '''source: http://www.daniweb.com/code/snippet368.html'''
+        """Source: http://www.daniweb.com/code/snippet368.html"""
         t1 = time.time()
         res = await func(*arg, **kw)
         t2 = time.time()
@@ -64,30 +57,53 @@ def retrieve_key_worker(key_queue: Queue, results):
 
 @timing_val
 def retrieve_in_thread(keys: List[str], num_threads=100):
-        key_queue = Queue()
-        results = []
-        for key in keys:
-            key_queue.put(key)
-        # Create threads, start them, and then wait for them
-        threads = [threading.Thread(target=retrieve_key_worker, args=(key_queue, results)) for _ in range(num_threads)]
-        for thread in threads:
-            thread.start()
-        for thread in threads:
-            thread.join()
-        assert len(results) == len(keys)
-        return results
+    key_queue = Queue()
+    results = []
+    for key in keys:
+        key_queue.put(key)
+    # Create threads, start them, and then wait for them
+    threads = []
+    for i in range(num_threads):
+        if not key_queue.empty():
+            threads.append(threading.Thread(target=retrieve_key_worker, args=(key_queue, results)))
+            threads[-1].start()
+        else:
+            print(f'Only {i} threads were needed')
+            break
+    for thread in threads:
+        thread.join()
+    assert len(results) == len(keys)
+    return results
 
 
-for num_objects in [100, 1000, 10000, 100000]:
-    keys = s3_keys[:num_objects]
+@timing_val
+def retrieve_in_thread_buggy(keys: List[str], num_threads=100):
+    key_queue = Queue()
+    results = []
+    for key in keys:
+        key_queue.put(key)
+    # Create threads, start them, and then wait for them
+    threads = [threading.Thread(target=retrieve_key_worker, args=(key_queue, results)) for _ in range(num_threads)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+    assert len(results) == len(keys)
+    return results
+
+
+if __name__ == '__main__':
+    bucket = 'public-async-testing'
+    s3_keys = [f'samples/{i}.txt' for i in range(20000)]
+
     loop = asyncio.get_event_loop()
-    async_result = loop.run_until_complete(retrieve_with_async(loop, keys))
-    thread_result = retrieve_in_thread(keys)
-    print(f'async retrieved {num_objects} objects in {async_result[0]}')
-    print(f'threading retrieved {num_objects} objects in {thread_result[0]}')
-
-for num_objects in [100, 500, 1000, 5000, 10000]:
-    for num_threads in [10, 20, 30, 50, 75, 100, 150]:
-        keys = s3_keys[:num_objects]
-        thread_result = retrieve_in_thread(keys, num_threads)
-        print(f'threading retrieved {num_objects} objects in {thread_result[0]} seconds using {num_threads} threads')
+    for num_objects in [100, 300, 1000, 3000, 10000, 2000]:
+        keys_to_load = s3_keys[:num_objects]
+        async_result = loop.run_until_complete(retrieve_with_async(loop, keys_to_load))
+        print(f'async retrieved {num_objects} objects in {async_result[0]}')
+        for n_threads in [10, 30, 50, 100, 200]:
+            thread_result = retrieve_in_thread(keys_to_load, n_threads)
+            buggy_result = retrieve_in_thread_buggy(keys_to_load)
+            print(f'threading retrieved {num_objects} objects in {thread_result[0]} seconds using {n_threads} threads')
+            print(f'Buggy threading retrieved {num_objects} objects in {buggy_result[0]}')
+        buggy_result = retrieve_in_thread_buggy(keys_to_load)
