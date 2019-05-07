@@ -75,7 +75,7 @@ Next, let's look at how performance varies with different numbers of objects to 
 
 [Chart]
 
-Creating threads has surprisingly high overhead; about 0.01 seconds to create the thread itself, and a surprising 0.05 seconds to create a boto3 client. (All performance numbers in this article are from my older-than-I'd-like MacBook Pro working over a good quality WiFi connection.) This lead to a huge performance drag when retrieving small numbers of objects. With 100 threads, retrieving 100 objects takes 6 seconds, compared 0.XX for the async function and 1.XX with a more reasonable 10 threads. We tried to ameliorate this by e.g. deferring client creation until the thread has a key to retrieve, but the real solution (of course) is just to not use one thread per object. In general, using too many threads is a problem. By contrast, setting a high concurrency value for aiobotocore didn't cause any problems for us.
+Creating threads has surprisingly high overhead; about 0.01 seconds to create the thread itself, and a surprising 0.05 seconds to create a boto3 client. (All performance numbers in this article are from my older-than-I'd-like MacBook Pro working over a good quality WiFi connection.) This lead to a huge performance drag when retrieving small numbers of objects. With 100 threads, retrieving 100 objects takes 6 seconds, compared 1.39 seconds for the async function and 1.70 with a more reasonable 10 threads. We tried to ameliorate this by e.g. deferring client creation until the thread has a key to retrieve, but the real solution (of course) is just to not use one thread per object. In general, using too many threads is a problem. By contrast, setting a high concurrency value for aiobotocore didn't cause any problems for us.
 
 On the other hand, creating threads requires an explicit decision about the degree of concurrency. Aiobotocore defaults to a pool of ten connections, which is too few our use-case. (For a while, we mistakenly believed that the default was 100 connections and that aiobotocore was just slower than threading.) Even though libraries like aiobotocore and aiohttp don't require you to explicitly set the level of concurrency, you should still experiment with it.
 
@@ -89,10 +89,20 @@ By contrast, threading can easily be wrapped around synchronous code without muc
 
 The second reason we prefer threading is that asyncio is still immature. It was only introduced in Python 3.4 and was significantly restructured with the introduction of the `async` keyword in 3.5. New features were introduced in 3.7, like the [create_task](https://docs.python.org/3/library/asyncio-task.html#asyncio.create_task) function. The documentation has also shifted significantly, with  e.g. more emphasis on awaitables in [3.7](https://docs.python.org/3.7/library/asyncio-task.html) than in [3.5](https://docs.python.org/3.5/library/asyncio-eventloop.html). 
 
-For the final reason we prefer threading, we'll refer back to the title of this blog post. When we use the asyncio code to download 100k objects, it doesn't actually work:
+For the final reason we prefer threading, we'll refer back to the title of this blog post. When we use the asyncio code to download 100k objects, it doesn't always work:
 
 > botocore.exceptions.ClientError: An error occurred (RequestTimeTooSkewed) when calling the GetObject operation: The difference between the request time and the current time is too large.
 
 Our async code creates all 100k requests at once and then parcels them out over about ten minutes. However, by the time the server receives the last of those requests, enough time has passed that the server raises the RequestTimeTooSkewed error.
 
-Perhaps this shouldn't be held against asyncio more generally. It's an implementation detail of how AWS handles requests, and there's an easy fix (breaking up the 100k requests into smaller batches). But from our perspective, it reflects the major difference between threading asyncio. Threading uses existing code with only minimal alteration. By contrast, asyncio requires users to alter code at a very low level, and that can have unexpected results. 
+Perhaps this shouldn't be held against asyncio more generally. It's an implementation detail of how AWS handles requests, and there's an easy fix (breaking up the 100k requests into smaller batches). But from our perspective, it reflects the major difference between threading asyncio. Threading uses existing code with only minimal alteration. By contrast, asyncio requires users to alter code at a very low level, and that can have unexpected results.
+
+Anyway, as promised, our threading code can download 100k files in 342.51 seconds with 50 threads:
+
+```python
+num_threads = 50
+keys_to_load = [f'samples/{i}.txt' for i in range(100000)]
+thread_result = retrieve_with_thread_executor(keys_to_load, num_threads)
+print(f'Successfully loaded 100000 objects in {thread_result[0]} with {num_threads} threads')
+```
+> Successfully loaded 100000 objects in 342.506783246994 with 50 threads
